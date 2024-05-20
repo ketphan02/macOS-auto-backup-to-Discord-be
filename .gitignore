@@ -26,4 +26,5 @@ dist/
 prisma/db/
 
 .idea/
+
 .env
