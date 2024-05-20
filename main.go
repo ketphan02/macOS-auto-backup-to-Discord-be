@@ -114,7 +114,8 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("Number of chunks: ", len(newChunks))
 	discordChannelID := os.Getenv("DISCORD_CHANNEL_ID")
 	for idx, newByteChunk := range newChunks {
-		discordSent, err := discordBot.ChannelFileSend(discordChannelID, fileName+"-Chunk#"+strconv.FormatInt(int64(idx), 10), bytes.NewReader(newByteChunk))
+		newFileName := "Chunk #" + strconv.FormatInt(int64(idx), 10) + " of " + fileName
+		discordSent, err := discordBot.ChannelFileSend(discordChannelID, newFileName, bytes.NewReader(newByteChunk))
 		if err != nil {
 			fmt.Println("Error sending file to Discord: ", err)
 			return
