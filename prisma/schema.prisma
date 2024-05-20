@@ -1,0 +1,25 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator db {
+  provider = "go run github.com/steebchen/prisma-client-go"
+}
+
+model File {
+  id            String      @id @default(cuid())
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  childrenFiles ChunkFile[]
+  fileName      String
+  fileType      String
+}
+
+model ChunkFile {
+  id               String @id @default(cuid())
+  file             File   @relation(fields: [fileId], references: [id])
+  fileId           String
+  discordMessageId String
+  order            Int
+}
