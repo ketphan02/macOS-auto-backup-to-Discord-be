@@ -11,9 +11,11 @@ import (
 	"log"
 	"macOS-auto-backup-to-Discord-be/handlers/error_handlers"
 	"macOS-auto-backup-to-Discord-be/prisma/db"
+	"macOS-auto-backup-to-Discord-be/utils/security"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 )
 
 const MaxUploadSize int64 = 2 * 1024 * 1024 // 2 MB
@@ -100,6 +102,7 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fileName := fileHeader.Filename
 	fileBytes, err := io.ReadAll(file)
 	fileType := mimetype.Detect(fileBytes).String()
+	fileName = fileName[:len(fileName)-len(fileName[strings.LastIndex(fileName, "."):])]
 
 	newFile, err := client.File.CreateOne(
 		db.File.FileName.Set(fileName),
@@ -110,11 +113,12 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Fatalln("Error creating new file: ", err)
 	}
 
-	var newChunks = sliceBigFileToSmallFiles(fileBytes)
+	encryptedFileBytes, err := security.Encrypt([]byte(os.Getenv("ENCRYPTION_KEY")), fileBytes)
+	var newChunks = sliceBigFileToSmallFiles(encryptedFileBytes)
 	fmt.Println("Number of chunks: ", len(newChunks))
 	discordChannelID := os.Getenv("DISCORD_CHANNEL_ID")
 	for idx, newByteChunk := range newChunks {
-		newFileName := "Chunk #" + strconv.FormatInt(int64(idx), 10) + " of " + fileName
+		newFileName := "Chunk #" + strconv.FormatInt(int64(idx), 10) + " of " + fileName + ".txt"
 		discordSent, err := discordBot.ChannelFileSend(discordChannelID, newFileName, bytes.NewReader(newByteChunk))
 		if err != nil {
 			fmt.Println("Error sending file to Discord: ", err)
