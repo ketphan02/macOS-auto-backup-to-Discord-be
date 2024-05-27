@@ -9,18 +9,16 @@ import (
 	"github.com/joho/godotenv"
 	"io"
 	"log"
+	"macOS-auto-backup-to-Discord-be/configs"
 	"macOS-auto-backup-to-Discord-be/handlers/error_handlers"
 	"macOS-auto-backup-to-Discord-be/prisma/db"
+	"macOS-auto-backup-to-Discord-be/utils/files"
 	"macOS-auto-backup-to-Discord-be/utils/security"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 )
-
-const MaxUploadSize int64 = 2 * 1024 * 1024 // 2 MB
-const uploadPath = "./tmp"
-const fileSizeLimit = 23 * 1024 * 1024 // 23 MB, buffer 2 MB
 
 var ctx = context.Background()
 
@@ -85,8 +83,8 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		error_handlers.MethodNotAllowedHandler(w, r)
 		return
 	}
-	err := r.ParseMultipartForm(MaxUploadSize)
-	mimetype.SetLimit(uint32(MaxUploadSize))
+	err := r.ParseMultipartForm(configs.MaxUploadSize)
+	mimetype.SetLimit(uint32(configs.MaxUploadSize))
 	if err != nil {
 		error_handlers.InternalServerErrorHandler(w, r)
 		log.Fatalln("Error parsing form: ", err)
@@ -114,7 +112,7 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	encryptedFileBytes, err := security.Encrypt([]byte(os.Getenv("ENCRYPTION_KEY")), fileBytes)
-	var newChunks = sliceBigFileToSmallFiles(encryptedFileBytes)
+	var newChunks = files.Chunkify(encryptedFileBytes)
 	fmt.Println("Number of chunks: ", len(newChunks))
 	discordChannelID := os.Getenv("DISCORD_CHANNEL_ID")
 	for idx, newByteChunk := range newChunks {
@@ -136,18 +134,4 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Println(newChunk)
 	}
-}
-
-func sliceBigFileToSmallFiles(file []byte) [][]byte {
-	var newChunk [][]byte
-	currentChunk := file
-	for len(currentChunk) > 0 {
-		if len(currentChunk) <= fileSizeLimit {
-			newChunk = append(newChunk, currentChunk)
-			break
-		}
-		newChunk = append(newChunk, currentChunk[:fileSizeLimit])
-		currentChunk = currentChunk[fileSizeLimit:]
-	}
-	return newChunk
 }
