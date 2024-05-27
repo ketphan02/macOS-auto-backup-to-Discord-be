@@ -12,7 +12,7 @@ import (
 	"macOS-auto-backup-to-Discord-be/configs"
 	"macOS-auto-backup-to-Discord-be/handlers/error_handlers"
 	"macOS-auto-backup-to-Discord-be/prisma/db"
-	"macOS-auto-backup-to-Discord-be/utils/files"
+	"macOS-auto-backup-to-Discord-be/utils/file_util"
 	"macOS-auto-backup-to-Discord-be/utils/security"
 	"net/http"
 	"os"
@@ -37,6 +37,17 @@ func main() {
 }
 
 func run() error {
+	client = db.NewClient()
+	if err := client.Prisma.Connect(); err != nil {
+		fmt.Println("Error connecting to database: ", err)
+		return err
+	}
+	defer func() {
+		if err := client.Prisma.Disconnect(); err != nil {
+			panic(err)
+		}
+	}()
+
 	_discordBot, err := discordgo.New("Bot " + os.Getenv("DISCORD_TOKEN"))
 	if err != nil {
 		fmt.Println("Error initializing go project: ", err)
@@ -55,16 +66,107 @@ func run() error {
 		}
 	}(discordBot)
 
-	client = db.NewClient()
-	if err := client.Prisma.Connect(); err != nil {
-		fmt.Println("Error connecting to database: ", err)
-		return err
-	}
-	defer func() {
-		if err := client.Prisma.Disconnect(); err != nil {
-			panic(err)
+	// On receive message
+	discordBot.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
+		if m.Author.ID == s.State.User.ID {
+			return
 		}
-	}()
+
+		if m.Content == "!recover" {
+			_, err := s.ChannelMessageSend(m.ChannelID, "Recovering file...")
+			if err != nil {
+				fmt.Println("Error sending message to Discord: ", err)
+				return
+			}
+
+			allFiles, err := client.File.FindMany().OrderBy(
+				db.File.UpdatedAt.Order(db.SortOrderAsc),
+			).Exec(ctx)
+			if err != nil {
+				fmt.Println("Error finding files: ", err)
+				return
+			}
+
+			for _, file := range allFiles {
+				allChunks, err := client.ChunkFile.FindMany(
+					db.ChunkFile.File.Where(db.File.ID.Equals(file.ID)),
+				).OrderBy(
+					db.ChunkFile.Order.Order(db.SortOrderAsc),
+				).Exec(ctx)
+				if err != nil {
+					fmt.Println("Error finding chunks: ", err)
+					return
+				}
+
+				var encryptedReconstructedFileBytes []byte
+				for _, chunk := range allChunks {
+					discordMessage, err := discordBot.ChannelMessage(
+						m.ChannelID,
+						chunk.DiscordMessageID,
+					)
+					if err != nil {
+						fmt.Println("Error getting message from Discord: ", err)
+						return
+					}
+
+					attachmentURL := discordMessage.Attachments[0].URL
+
+					// Fetch the file from Discord
+					resp, err := http.Get(attachmentURL)
+					if err != nil {
+						fmt.Println("Error fetching file from Discord: ", err)
+						return
+					}
+					defer resp.Body.Close()
+
+					// Read the file
+					encryptedChunkBytes, err := io.ReadAll(resp.Body)
+					if err != nil {
+						fmt.Println("Error reading file: ", err)
+						return
+					}
+
+					encryptedReconstructedFileBytes = append(encryptedReconstructedFileBytes, encryptedChunkBytes...)
+				}
+
+				if len(encryptedReconstructedFileBytes) == 0 {
+					fmt.Println("No file found")
+					return
+				}
+
+				decryptedReconstructedFileBytes, err := security.Decrypt([]byte(os.Getenv("ENCRYPTION_KEY")), encryptedReconstructedFileBytes)
+				if err != nil {
+					fmt.Println("Error decrypting file: ", err)
+					return
+				}
+
+				// Write the file locally
+				newFileName := file.FileName
+				newFileType := strings.Split(file.FileType, "/")[1]
+				newFileName = newFileName + "." + newFileType
+
+				// Write to folder "recovered_files"
+				err = os.WriteFile("recovered_files/"+newFileName, decryptedReconstructedFileBytes, 0644)
+
+				numChunks := strconv.FormatInt(int64(len(allChunks)), 10)
+				fileName := file.FileName
+				fileType := file.FileType
+
+				msg := "Recovering file: " + fileName + " with " + numChunks + " chunks (" + fileType + ")"
+				_, err = discordBot.ChannelMessageSend(m.ChannelID, msg)
+				if err != nil {
+					fmt.Println("Error sending message to Discord: ", err)
+					return
+				}
+			}
+
+			_, err = s.ChannelMessageSend(m.ChannelID, "Total files recovered: "+strconv.FormatInt(int64(len(allFiles)), 10))
+			if err != nil {
+				fmt.Println("Error sending message to Discord: ", err)
+				return
+			}
+		}
+	})
 
 	mux := http.NewServeMux()
 	mux.Handle("/message", &messageHandler{})
@@ -112,7 +214,7 @@ func (h *messageHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	encryptedFileBytes, err := security.Encrypt([]byte(os.Getenv("ENCRYPTION_KEY")), fileBytes)
-	var newChunks = files.Chunkify(encryptedFileBytes)
+	var newChunks = file_util.Chunkify(encryptedFileBytes)
 	fmt.Println("Number of chunks: ", len(newChunks))
 	discordChannelID := os.Getenv("DISCORD_CHANNEL_ID")
 	for idx, newByteChunk := range newChunks {

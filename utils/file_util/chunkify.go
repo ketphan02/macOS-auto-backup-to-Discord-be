@@ -1,4 +1,4 @@
-package files
+package file_util
 
 import "macOS-auto-backup-to-Discord-be/configs"
 

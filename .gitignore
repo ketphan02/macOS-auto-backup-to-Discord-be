@@ -28,3 +28,7 @@ prisma/db/
 .idea/
 
 .env
+
+recovered_files/
+
+.DS_Store
